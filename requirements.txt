@@ -1,5 +1,5 @@
-streamlit==1.21.0
-reportlab==3.6.6
-pandas==1.5.3
-Pillow==9.2.0
-uuid==1.30
+streamlit
+reportlab
+pandas
+Pillow
+uuid
