@@ -11,8 +11,20 @@ from io import BytesIO
 from PIL import Image as PILImage
 import datetime
 
-# ---------- Constants ----------
-STATIC_OBS_TEXT = (
+# Constants
+PHOTO_W = 2.9 * inch
+PHOTO_H = 2.1 * inch
+LOGO_TARGET_W = 1.6 * inch
+LOGO_PAD = 0.12 * inch  # small gap from top/right page edges
+
+BRAND_BLUE = colors.Color(0/255, 85/255, 153/255)  # #005599
+DISCLAIMER = (
+    "THE VISUAL FIELD OBSERVATIONS BY THE STRUCTURAL ENGINEER SHALL NOT BE CONSTRUED AS A CONTINUOUS OR "
+    "EXHAUSTIVE PROJECT REVIEW. THESE OBSERVATIONS ARE NOT A WAIVER OF THE GENERAL CONTRACTOR (OR ANY ENTITY "
+    "FURNISHING MATERIALS OR PERFORMING WORK ON THE PROJECT) FROM RESPONSIBILITY AND/OR PERFORMANCE IN "
+    "ACCORDANCE WITH THE REQUIREMENTS OF THE CONTRACT DOCUMENTS AND SPECIFICATIONS."
+)
+OBSERVATIONS_DEFAULT = (
     "The purpose of this site visit was to observe and review the grade beams, and to determine whether "
     "the work of the contractor was in general conformance with the structural construction documents. "
     "See Figure 1.00 for the overview of the construction site. During the observation visit, the grade "
@@ -21,15 +33,8 @@ STATIC_OBS_TEXT = (
     "beams were still ongoing at the time of visit. Overall construction matched the requirements of "
     "structural drawings in the observed area except as listed below:"
 )
-DISCLAIMER = (
-    "THE VISUAL FIELD OBSERVATIONS BY THE STRUCTURAL ENGINEER SHALL NOT BE CONSTRUED AS A CONTINUOUS OR "
-    "EXHAUSTIVE PROJECT REVIEW. THESE OBSERVATIONS ARE NOT A WAIVER OF THE GENERAL CONTRACTOR (OR ANY ENTITY "
-    "FURNISHING MATERIALS OR PERFORMING WORK ON THE PROJECT) FROM RESPONSIBILITY AND/OR PERFORMANCE IN "
-    "ACCORDANCE WITH THE REQUIREMENTS OF THE CONTRACT DOCUMENTS AND SPECIFICATIONS."
-)
-BRAND_BLUE = colors.Color(0/255, 85/255, 153/255)  # #005599
 
-# ---------- Helpers ----------
+# Helper functions
 def _fmt_dt(dt, with_time=False):
     if not dt:
         return ""
@@ -39,28 +44,42 @@ def _fmt_dt(dt, with_time=False):
         return dt.strftime("%m/%d/%Y")
     return str(dt)
 
-def _img_from_bytes(img_bytes, max_w, max_h):
+def _scaled_dims(orig_w, orig_h, max_w, max_h):
+    scale = min(float(max_w) / float(orig_w), float(max_h) / float(orig_h))
+    return (orig_w * scale, orig_h * scale)
+
+def _img_from_bytes(img_bytes, max_w=PHOTO_W, max_h=PHOTO_H):
+    """
+    Return a ReportLab Image using the ORIGINAL bytes (no re-encode) for best quality,
+    scaled to fit inside (max_w x max_h). If format is unsupported, fallback to JPEG encode.
+    """
     if not img_bytes:
         return None
     try:
-        pil = PILImage.open(BytesIO(img_bytes)).convert("RGB")
-        pil.thumbnail((int(max_w), int(max_h)))
-        out = BytesIO()
-        pil.save(out, format="JPEG", quality=85)
-        out.seek(0)
-        rl_img = RLImage(out)
-        rl_img._restrictSize(max_w, max_h)
-        return rl_img
+        # Open via PIL to get original size (HEIC supported if pillow-heif is installed)
+        pil = PILImage.open(BytesIO(img_bytes))
+        w, h = pil.size
+        new_w, new_h = _scaled_dims(w, h, max_w, max_h)
+
+        # Prefer using original bytes to avoid recompression blur
+        try:
+            rdr = ImageReader(BytesIO(img_bytes))
+            return RLImage(rdr, width=new_w, height=new_h)
+        except Exception:
+            # Fallback: encode to JPEG once in-memory
+            out = BytesIO()
+            pil.convert("RGB").save(out, format="JPEG", quality=95)
+            out.seek(0)
+            return RLImage(out, width=new_w, height=new_h)
     except Exception:
         return None
 
-def _make_logo_reader(logo_bytes, target_width=1.6*inch):
-    """Return (ImageReader, width, height) scaled to target_width."""
+def _make_logo_reader(logo_bytes, target_width=LOGO_TARGET_W):
     if not logo_bytes:
         return None, 0, 0
     pil = PILImage.open(BytesIO(logo_bytes))
     w, h = pil.size
-    scale = target_width / float(w)
+    scale = float(target_width) / float(w)
     new_w, new_h = target_width, h * scale
     bio = BytesIO()
     pil.save(bio, format="PNG")
@@ -68,11 +87,8 @@ def _make_logo_reader(logo_bytes, target_width=1.6*inch):
     return ImageReader(bio), new_w, new_h
 
 def _draw_footer(canvas: Canvas, doc, footer_address: str):
-    """Centered blue disclaimer + centered bold blue address + page number (right)."""
     canvas.saveState()
     width, height = LETTER
-
-    # Styles for drawing paragraphs
     footer_style = ParagraphStyle(name="FooterSmall", fontName="Helvetica", fontSize=7, leading=9,
                                   textColor=BRAND_BLUE, alignment=TA_CENTER)
     address_style = ParagraphStyle(name="FooterAddress", fontName="Helvetica-Bold", fontSize=10, leading=12,
@@ -80,8 +96,7 @@ def _draw_footer(canvas: Canvas, doc, footer_address: str):
 
     disclaimer_para = Paragraph(DISCLAIMER, footer_style)
     avail_width = doc.width
-    # Position just above the very bottom; we stack: disclaimer (y+20), address (y+8), number at (y+8)
-    base_y = 8  # baseline above the page edge
+    base_y = 8
     w, h = disclaimer_para.wrap(avail_width, 200)
     disclaimer_para.drawOn(canvas, doc.leftMargin, base_y + 20)
 
@@ -96,15 +111,15 @@ def _draw_footer(canvas: Canvas, doc, footer_address: str):
     canvas.restoreState()
 
 def _draw_logo(canvas: Canvas, doc, logo_reader, logo_w, logo_h):
-    """Draw logo at top-right inside page margins (on EVERY page)."""
+    """Place logo at the *page* top-right corner with a tiny padding."""
     if not logo_reader:
         return
-    width, height = LETTER
-    x = doc.leftMargin + doc.width - logo_w
-    y = height - doc.topMargin - logo_h + 6  # small nudge down like sample
+    page_w, page_h = LETTER
+    x = page_w - LOGO_PAD - logo_w
+    y = page_h - LOGO_PAD - logo_h
     canvas.drawImage(logo_reader, x, y, width=logo_w, height=logo_h, mask='auto')
 
-# ---------- Main ----------
+# ---- Main Function ----
 def generate_pdf(data: dict) -> bytes:
     buf = BytesIO()
     doc = SimpleDocTemplate(
@@ -112,8 +127,8 @@ def generate_pdf(data: dict) -> bytes:
         pagesize=LETTER,
         leftMargin=0.75*inch,
         rightMargin=0.75*inch,
-        topMargin=0.75*inch,
-        bottomMargin=1.15*inch,  # a bit more for centered footer
+        topMargin=2*inch,  # Increased margin for logo at the top of the page
+        bottomMargin=1.15*inch,
         title=f"{data.get('project_number','')}_{data.get('title','')}_Field_Report",
     )
 
@@ -125,12 +140,9 @@ def generate_pdf(data: dict) -> bytes:
     styles.add(ParagraphStyle(name="Sig", fontName="Helvetica-Bold", fontSize=11, leading=15, spaceBefore=8))
 
     story = []
+    story.append(Paragraph("FIELD REPORT", styles["TitleMain"]))
+    story.append(Spacer(2, 6))
 
-    # Title (logo will be drawn by the page callback on all pages)
-    story.append(Paragraph("F I E L D  R E P O R T", styles["TitleMain"]))
-    story.append(Spacer(1, 6))
-
-    # Bullet rows (■ label | value)
     bullet = '<font size="14">■</font>'
     rows = []
 
@@ -149,17 +161,31 @@ def generate_pdf(data: dict) -> bytes:
     present_txt = ", ".join([p for p in (data.get("present") or []) if str(p).strip()])
     rows.append([Paragraph(f"{bullet}  <b>Present:</b>", styles["Body"]), Paragraph(present_txt, styles["Body"])])
 
-    # Observations: static text + (optional) extra obs from user + numbered list from media descriptions
+    # -------- Observations block --------
+    obs_text = (data.get("observations") or "").strip() or OBSERVATIONS_DEFAULT
+    obs_cells = [Paragraph(obs_text.replace("\n", "<br/>"), styles["ObsPara"])]
+
+    count = 0
+    observation_items = [it.strip() for it in (data.get("observation_items") or []) if it and it.strip()]
+    for it in observation_items:
+        count += 1
+        obs_cells.append(Paragraph(f"{count}. {it}", styles["ObsItem"]))
+
     media = data.get("media") or []
-    obs_cells = [Paragraph(STATIC_OBS_TEXT, styles["ObsPara"])]
-    if data.get("observations"):
-        obs_cells.append(Paragraph((data["observations"]).replace("\n", "<br/>"), styles["ObsPara"]))
-    for i, m in enumerate(media, start=1):
+    for idx, m in enumerate(media, start=1):
         desc = (m.get("description") or "").strip()
-        if desc:
-            obs_cells.append(Paragraph(f"{i}. {desc}", styles["ObsItem"]))
+        include = bool(m.get("include_in_obs", False))
+        if desc and include:
+            count += 1
+            obs_cells.append(Paragraph(f"{count}. {desc} (Figure {idx})", styles["ObsItem"]))
+
     obs_tbl = Table([[obs_cells]], colWidths=[5.3*inch])
-    obs_tbl.setStyle(TableStyle([("LEFTPADDING",(0,0),(-1,-1),0), ("RIGHTPADDING",(0,0),(-1,-1),0)]))
+    obs_tbl.setStyle(TableStyle([
+        ("LEFTPADDING",(0,0),(-1,-1),0),
+        ("RIGHTPADDING",(0,0),(-1,-1),0),
+        ("TOPPADDING",(0,0),(-1,-1),0),
+        ("BOTTOMPADDING",(0,0),(-1,-1),0),
+    ]))
     rows.append([Paragraph(f"{bullet}  <b>Observations:</b>", styles["Body"]), obs_tbl])
 
     # Remarks
@@ -180,17 +206,19 @@ def generate_pdf(data: dict) -> bytes:
         story.append(Paragraph("Graduate Engineer", styles["Sig"]))
         story.append(Paragraph("MSE", styles["Sig"]))
 
-    # ===== Page 2+: Media Table =====
+    # ----- Media table (next page) -----
     story.append(PageBreak())
     tbl_data = [[Paragraph("<b>Item Number</b>", styles["Body"]),
                  Paragraph("<b>Photo</b>", styles["Body"]),
                  Paragraph("<b>Comment/Action</b>", styles["Body"])]]
-    for idx, item in enumerate(media, start=1):
-        rl_img = _img_from_bytes(item.get("image_bytes"), max_w=2.9*inch, max_h=2.1*inch)
-        desc = Paragraph((item.get("description") or "").replace("\n","<br/>"), styles["Body"])
-        tbl_data.append([Paragraph(f"Figure {idx}", styles["Body"]), rl_img or Paragraph("—", styles["Body"]), desc])
 
-    media_tbl = Table(tbl_data, colWidths=[1.1*inch, 2.9*inch, 3.4*inch], repeatRows=1)
+    for idx, item in enumerate(media, start=1):
+        rl_img = _img_from_bytes(item.get("image_bytes"), max_w=PHOTO_W, max_h=PHOTO_H)
+        photo_cell = rl_img if rl_img is not None else Paragraph("—", styles["Body"])
+        desc = Paragraph((item.get("description") or "").replace("\n","<br/>"), styles["Body"])
+        tbl_data.append([Paragraph(f"Figure {idx}", styles["Body"]), photo_cell, desc])
+
+    media_tbl = Table(tbl_data, colWidths=[1.1*inch, PHOTO_W, 3.4*inch], repeatRows=1)
     media_tbl.setStyle(TableStyle([
         ("GRID",(0,0),(-1,-1),0.3,colors.grey),
         ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
@@ -200,21 +228,23 @@ def generate_pdf(data: dict) -> bytes:
     story.append(media_tbl)
 
     footer_address = data.get("footer_address", "")
-    # Prepare logo reader once and reuse in both callbacks
+
+    # Logo on all pages (absolute top-right with small padding)
     logo_reader, logo_w, logo_h = (None, 0, 0)
     if data.get("logo_bytes"):
         try:
-            logo_reader, logo_w, logo_h = _make_logo_reader(data["logo_bytes"], target_width=1.6*inch)
+            logo_reader, logo_w, logo_h = _make_logo_reader(data["logo_bytes"], target_width=LOGO_TARGET_W)
         except Exception:
             logo_reader = None
 
-    # Build with header logo + centered footer on every page
     def _first_page(c, d):
-        _draw_logo(c, d, logo_reader, logo_w, logo_h)
+        if logo_reader:
+            _draw_logo(c, d, logo_reader, logo_w, logo_h)
         _draw_footer(c, d, footer_address)
 
     def _later_pages(c, d):
-        _draw_logo(c, d, logo_reader, logo_w, logo_h)
+        if logo_reader:
+            _draw_logo(c, d, logo_reader, logo_w, logo_h)
         _draw_footer(c, d, footer_address)
 
     doc.build(story, onFirstPage=_first_page, onLaterPages=_later_pages)
