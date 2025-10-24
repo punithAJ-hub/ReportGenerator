@@ -19,21 +19,24 @@ OBS_TEMPLATE = (
 
 REMARKS_DEFAULT = (
     "The contractor was informed of the above-mentioned discrepancies in the field. "
-    "All discrepancies shall be fixed, and all debris shall be cleaned out of grade beam trenches "
-    "prior to concrete placement. See the following pages for photographs."
+    "All discrepancies shall be fixed, and all debris shall be cleaned out of grade beam "
+    "trenches prior to concrete placement. See the following pages for photographs."
 )
 
 PRESENT_OPTIONS = ["Havish", "John", "Cena"]
 SCOPE_OPTIONS = ["Grade Beam", "SOG", "Steel Framing"]
 
+
 # ===================== Helpers =====================
 def _new_media():
     return {"id": str(uuid.uuid4()), "file": None, "description": "", "include": False}
+
 
 def _ensure_media_ids():
     for m in st.session_state["media_items"]:
         if "id" not in m or not m["id"]:
             m["id"] = str(uuid.uuid4())
+
 
 def _delete_media_by_id(item_id: str):
     if not item_id:
@@ -46,8 +49,10 @@ def _delete_media_by_id(item_id: str):
         if k.endswith(f"_{item_id}") or k == f"remove_media_{item_id}":
             del st.session_state[k]
 
+
 def _new_obs_item(text: str = ""):
     return {"id": str(uuid.uuid4()), "text": text}
+
 
 def _ensure_obs_items_struct():
     # Initialize modern structure if missing or migrate old list if present
@@ -64,6 +69,7 @@ def _ensure_obs_items_struct():
         if "text" not in it:
             it["text"] = ""
 
+
 def _delete_obs_by_id(oid: str):
     if not oid:
         return
@@ -75,12 +81,12 @@ def _delete_obs_by_id(oid: str):
         if k in (f"del_obs_{oid}",) or k.endswith(f"_{oid}"):
             del st.session_state[k]
 
+
 def _fill_scope_placeholders(text: str, scope: str) -> str:
     """Replace all underscore groups (_____ etc.) with the chosen scope."""
-    # We simply replace every run of underscores with the scope text.
-    # (Keeps it simple and predictable per your request)
     import re
     return re.sub(r"_{2,}", scope, text)
+
 
 # ===================== Session State =====================
 def ensure_state():
@@ -99,11 +105,16 @@ def ensure_state():
     ss.setdefault("present_multi", [])
     ss.setdefault("scope_selected", SCOPE_OPTIONS[0])  # single select scope
     ss.setdefault("observations", _fill_scope_placeholders(OBS_TEMPLATE, ss["scope_selected"]))
-    ss.setdefault("remarks", REMARKS_DEFAULT)
+
+    # Ensure remarks are populated with default text
+    if not ss.get("remarks"):
+        ss["remarks"] = REMARKS_DEFAULT
+
     ss.setdefault("prepared_by", "John")
     ss.setdefault("media_items", [_new_media()])
     ss.setdefault("_do_clear", False)
     ss.setdefault("_remove_media_id", "")
+
 
 def perform_clear_if_needed():
     ss = st.session_state
@@ -126,11 +137,13 @@ def perform_clear_if_needed():
             del ss[k]
     ss["_do_clear"] = False
 
+
 def perform_delete_if_needed():
     item_id = st.session_state.get("_remove_media_id", "")
     if item_id:
         _delete_media_by_id(item_id)
         st.session_state["_remove_media_id"] = ""
+
 
 # ===================== App Start =====================
 ensure_state()
@@ -265,17 +278,11 @@ st.markdown("---")
 st.subheader("Media")
 
 # ===================== Media (stable IDs) =====================
-# app.py
-
-# Media section (stable IDs)
 for m in st.session_state["media_items"]:
     item_id = m["id"]
+    mc1, mc2 = st.columns([2, 1])  # Adjusting column widths for better alignment
 
-    # Create a two-column layout: one for image upload and description, and one for the checkbox
-    col1, col2 = st.columns([2, 1])  # Adjusted the width ratio for better space distribution
-
-    # Column 1: Image Upload and Description
-    with col1:
+    with mc1:
         st.file_uploader(
             "Image",
             type=["png", "jpg", "jpeg", "heic", "heif"],
@@ -284,8 +291,7 @@ for m in st.session_state["media_items"]:
         )
         st.text_area("Description", key=f"media_desc_{item_id}", height=100)
 
-    # Column 2: Checkbox to Add to Observations
-    with col2:
+    with mc2:
         include_key = f"media_include_{item_id}"
         if include_key not in st.session_state:
             st.session_state[include_key] = bool(m.get("include", False))
@@ -296,14 +302,13 @@ for m in st.session_state["media_items"]:
         m["description"] = st.session_state.get(f"media_desc_{item_id}", "")
         m["include"] = bool(st.session_state.get(include_key, False))
 
-    # Create a new row for the delete button, ensuring proper alignment below the checkbox
-    delete_col = st.columns([3])[0]  # Single-column layout for the delete button
+    # Delete button below Add to Observations checkbox
+    delete_col = st.columns([12])[0]
     with delete_col:
         if st.button("🗑️ Remove media", key=f"remove_media_{item_id}", help="Remove this media item"):
             st.session_state["_remove_media_id"] = item_id
             st.rerun()
-
-    st.markdown("---")  # Separate the sections with a line for clarity
+    st.markdown("---")
 
 # Add new media row
 if st.button("➕ Add more media"):
@@ -311,12 +316,11 @@ if st.button("➕ Add more media"):
     st.rerun()
 
 # ===================== Actions =====================
-st.markdown("## ")
 btn_col1, btn_col2 = st.columns([1, 1])
 with btn_col1:
     generate_clicked = st.button("📄 Generate PDF Report")
 with btn_col2:
-    if st.button("🧹 Clear Form"):
+    if st.button("🧹 Clear Form "):
         st.session_state["_do_clear"] = True
         st.rerun()
 
@@ -325,7 +329,7 @@ if generate_clicked:
     date_visited = st.session_state["date_visited_date"]
     date_of_report = st.session_state["dor_date"]
 
-    # Build media struct
+    # Build media list with bytes + include flag
     media_struct = []
     for m in st.session_state["media_items"]:
         f = m.get("file")
@@ -373,5 +377,3 @@ if generate_clicked:
         st.download_button("⬇️ Download Field Report", data=pdf_bytes, file_name=filename, mime="application/pdf")
     except Exception as e:
         st.error(f"Failed to generate PDF: {e}")
-
-st.caption("Tip: For HEIC/HEIF images, install `pillow-heif` to improve support (already handled if available).")
