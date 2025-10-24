@@ -3,3 +3,4 @@ reportlab
 pandas
 Pillow
 uuid
+openpyxl
